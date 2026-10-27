@@ -1,0 +1,34 @@
+const $=id=>document.getElementById(id);
+let source=null,result=null,sourceURL=null;
+function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error)}
+function invalidate(){result=null;$('enhanced').hidden=true;$('placeholder2').hidden=false;$('saveImage').disabled=true;$('saveReport').disabled=true;$('evaluation').hidden=true;$('stages').replaceChildren();for(const id of ['coverage','spacing','timing'])$(id).textContent='—';status('Settings changed. Enhance again to update the result.');}
+let selectionVersion=0;
+async function accept(file){
+ if(!file)return;
+ if(file.size>10*1024*1024){status('Please choose a file smaller than 10 MB.',true);return}
+ const version=++selectionVersion;
+ source=null;invalidate();$('run').disabled=true;$('original').hidden=true;$('placeholder1').hidden=false;
+ $('filename').textContent=file.name;$('dimensions').textContent='Reading image…';
+ $('inputTitle').textContent='Original image';
+ for(const key of ['crop_x','crop_y'])$(key).value=0;
+ for(const key of ['crop_w','crop_h'])$(key).value=100;
+ status('Reading image and preparing preview…');
+ try{
+  const body=new FormData();body.append('file',file);
+  const r=await fetch('/api/preview',{method:'POST',body});const d=await r.json();
+  if(version!==selectionVersion)return;
+  if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:'Could not read image.');
+  source=file;$('original').src=d.image;$('original').hidden=false;$('placeholder1').hidden=true;$('run').disabled=false;
+  $('dimensions').textContent=d.width+' × '+d.height+' px · source image';
+  status(d.pages>1?'Image ready. Using page 1 of '+d.pages+' from this file.':'Image ready. Choose a method, then enhance.');
+ }catch(e){if(version===selectionVersion){status(e.message||'Could not load image.',true);$('dimensions').textContent='Image could not be loaded';}}
+}
+$('file').onchange=e=>accept(e.target.files[0]);
+$('drop').ondragover=e=>e.preventDefault();$('drop').ondrop=e=>{e.preventDefault();accept(e.dataTransfer.files[0])};
+$('sample').onclick=async()=>{try{const r=await fetch('/api/sample');if(!r.ok)throw Error('Could not load sample.');const d=await r.json();const blob=await(await fetch(d.image)).blob();await accept(new File([blob],'synthetic-ridge-pattern.png',{type:'image/png'}));status(d.label+'. Use real impressions for project evaluation.')}catch(e){status(e.message,true)}};
+for(const id of ['method','strength','verify','noise','degradation','blur_sigma','crop_x','crop_y','crop_w','crop_h'])$(id).addEventListener('input',()=>{invalidate();$('strengthValue').textContent=$('strength').value+'%';$('noiseValue').textContent=$('noise').value+' / 255';$('noisebox').hidden=!$('verify').checked;$('strength').disabled=false;$('blurControls').hidden=$('degradation').value!=='blur';$('noiseControls').hidden=$('degradation').value!=='noise';$('blurValue').textContent=Number($('blur_sigma').value).toFixed(1)+' px'});
+$('run').onclick=async()=>{if(!source)return;const body=new FormData();body.append('file',source);body.append('method',$('method').value);body.append('strength',Number($('strength').value)/100);body.append('verify',$('verify').checked);body.append('noise',$('noise').value);body.append('degradation',$('degradation').value);body.append('blur_sigma',$('blur_sigma').value);for(const id of ['crop_x','crop_y','crop_w','crop_h'])body.append(id,Number($(id).value)/100);invalidate();$('run').disabled=true;document.querySelector('aside').classList.add('busy');status('Processing ridge structure and image detail…');try{const r=await fetch('/api/process',{method:'POST',body});const d=await r.json();if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:'Please check your settings and image.');result=d;$('original').src=d.input;$('enhanced').src=d.output;$('original').hidden=false;$('enhanced').hidden=false;$('placeholder1').hidden=true;$('placeholder2').hidden=true;$('inputTitle').textContent=d.report.verification?'Degraded test input':'Original · working crop';$('coverage').textContent=d.report.candidate_coverage_percent+'%';$('spacing').textContent=d.report.median_ridge_spacing_px?d.report.median_ridge_spacing_px+' px':'—';$('timing').textContent=d.report.processing_seconds+' s';$('dimensions').textContent=d.report.width+' × '+d.report.height+' px · working resolution';$('saveImage').disabled=false;$('saveReport').disabled=false;for(const [name,src] of Object.entries(d.stages)){const f=document.createElement('figure'),img=document.createElement('img'),cap=document.createElement('figcaption');img.src=src;img.alt=name;cap.textContent=name;f.append(img,cap);$('stages').append(f)}$('evaluation').hidden=!d.report.verification;if(d.report.verification){$('reference').src=d.reference;$('metricRows').replaceChildren();for(const [key,name] of [['psnr_db','PSNR (dB)'],['ssim','SSIM']]){const a=d.report.baseline[key],b=d.report.enhanced[key],tr=document.createElement('tr');for(const v of [name,a??'∞',b??'∞',a!==null&&b!==null?((b-a)>=0?'+':'')+(b-a).toFixed(key==='ssim'?4:2):'—']){const td=document.createElement('td');td.textContent=v;tr.append(td)}$('metricRows').append(tr)}$('verdict').textContent=d.report.delta_ssim>0?'Structural similarity increased on this test. Inspect the ridges for artifacts too.':'Structural similarity did not improve on this test. Try a method suited to the degradation, or reduce the strength.'}status(d.report.candidate_found?'Processing complete. Compare ridge continuity at 100% or 200% zoom.':'No reliable candidate region found. Try a closer crop or clearer impression. Noise reduction is still available.');applyZoom()}catch(e){status(e.message||'Processing failed. Is the local server running?',true)}finally{$('run').disabled=false;document.querySelector('aside').classList.remove('busy')}};
+function tab(stages){$('comparison').hidden=stages;$('stagesPanel').hidden=!stages;for(const [id,active] of [['compareTab',!stages],['stagesTab',stages]]){$(id).classList.toggle('active',active);$(id).setAttribute('aria-selected',active)}}$('compareTab').onclick=()=>tab(false);$('stagesTab').onclick=()=>tab(true);
+function applyZoom(){for(const id of ['original','enhanced']){const im=$(id);if($('zoom').value==='fit'){im.style.width='100%';im.style.height='100%';im.style.maxWidth=''}else{im.style.width=im.naturalWidth*Number($('zoom').value)+'px';im.style.height=im.naturalHeight*Number($('zoom').value)+'px';im.style.maxWidth='none'}}}$('zoom').onchange=applyZoom;for(const id of ['original','enhanced'])$(id).onload=applyZoom;
+function download(url,name){const a=document.createElement('a');a.href=url;a.download=name;a.click()}
+$('saveImage').onclick=()=>result&&download(result.output,'ridgelab-enhanced.png');$('saveReport').onclick=()=>{if(!result)return;const u=URL.createObjectURL(new Blob([JSON.stringify(result.report,null,2)],{type:'application/json'}));download(u,'ridgelab-report.json');setTimeout(()=>URL.revokeObjectURL(u),1000)};
